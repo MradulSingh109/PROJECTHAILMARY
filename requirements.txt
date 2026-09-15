@@ -1,0 +1,25 @@
+# ==============================================================================
+# IBVAP - Intelligent Border Video Analytics Platform (Stage 1 Dependencies)
+# ==============================================================================
+
+# Core Deep Learning & Computer Vision
+torch>=2.0.0
+torchvision>=0.15.0
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=9.5.0
+
+# Configuration & Data Management
+PyYAML>=6.0.0
+pydantic>=2.0.0
+
+# Geometry & Analytics (Intrusion/Zones)
+shapely>=2.0.0
+
+# Utilities, Logging & Visualization
+tqdm>=4.65.0
+matplotlib>=3.7.0
+
+# Optional: Interactive Experimentation & Prototyping
+ipykernel>=6.20.0
