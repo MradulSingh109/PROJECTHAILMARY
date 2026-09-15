@@ -1,7 +1,7 @@
 """
 =============================================================================
 IBVAP - Intelligent Border Video Analytics Platform
-Module: Video Rendering & Processing Pipeline (Stage 1)
+Module: Video Rendering & Processing Pipeline (Stage 2: Detection + Tracking)
 =============================================================================
 """
 
@@ -9,7 +9,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Union
 import cv2
 import numpy as np
 from tqdm import tqdm
@@ -20,38 +20,65 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from models.detection.detector import YOLO11Detector, DetectionResult
+from src.tracking.tracker import ByteTrackTracker
+from src.tracking.object_identity import TrackedObject
 
 
 class VideoRenderer:
     """
-    Renders and processes raw video streams frame-by-frame using YOLO11Detector,
-    displaying real-time surveillance HUD telemetry and writing processed outputs.
+    Renders and processes raw video streams frame-by-frame using YOLO11 + ByteTrack,
+    displaying real-time surveillance HUD telemetry, trajectory trails, and writing processed outputs.
     """
 
     def __init__(
         self,
+        tracker: Optional[ByteTrackTracker] = None,
         detector: Optional[YOLO11Detector] = None,
         model_path: str = "models/detection/yolo11n.pt",
+        enable_tracking: bool = True,
         conf_threshold: float = 0.35,
         target_classes: Optional[List[int]] = None,
         show_hud: bool = True,
+        draw_trajectories: bool = True,
+        max_trajectory_points: int = 120,
     ):
         """
-        :param detector: Existing YOLO11Detector instance. If None, instantiates a new one.
-        :param model_path: Model weights path if instantiating detector.
+        :param tracker: Optional ByteTrackTracker instance.
+        :param detector: Optional YOLO11Detector instance.
+        :param model_path: Model weights path if instantiating tracker/detector.
+        :param enable_tracking: If True, executes ByteTrack tracking with persistent IDs & motion trails.
         :param conf_threshold: Detection confidence threshold.
-        :param target_classes: Class IDs to detect (e.g. 0 for human, [2, 3, 5, 7] for vehicles).
+        :param target_classes: Class IDs to track/detect.
         :param show_hud: Whether to render surveillance telemetry header on the output.
+        :param draw_trajectories: Whether to render trailing motion paths.
+        :param max_trajectory_points: Maximum historical trailing points to render (controls trailing distance).
         """
-        if detector is not None:
-            self.detector = detector
-        else:
-            self.detector = YOLO11Detector(
-                model_path=model_path,
-                conf_threshold=conf_threshold,
-                target_classes=target_classes,
-            )
+        self.enable_tracking = enable_tracking
         self.show_hud = show_hud
+        self.draw_trajectories = draw_trajectories
+        self.max_trajectory_points = max_trajectory_points
+
+        if self.enable_tracking:
+            if tracker is not None:
+                self.tracker = tracker
+            else:
+                self.tracker = ByteTrackTracker(
+                    model_path=model_path,
+                    conf_threshold=conf_threshold,
+                    target_classes=target_classes,
+                    max_trajectory_points=max_trajectory_points,
+                )
+            self.detector = None
+        else:
+            self.tracker = None
+            if detector is not None:
+                self.detector = detector
+            else:
+                self.detector = YOLO11Detector(
+                    model_path=model_path,
+                    conf_threshold=conf_threshold,
+                    target_classes=target_classes,
+                )
 
     def _draw_surveillance_hud(
         self,
@@ -59,7 +86,7 @@ class VideoRenderer:
         frame_idx: int,
         total_frames: int,
         fps: float,
-        detections: List[DetectionResult],
+        objects: Union[List[TrackedObject], List[DetectionResult]],
     ) -> np.ndarray:
         """
         Renders an advanced, dark-themed top HUD bar with surveillance telemetry.
@@ -74,22 +101,22 @@ class VideoRenderer:
         cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 
         # Count humans and vehicles
-        human_count = sum(1 for d in detections if d.class_id == 0)
-        vehicle_count = sum(1 for d in detections if d.class_id in [1, 2, 3, 5, 7])
-        other_count = len(detections) - human_count - vehicle_count
+        human_count = sum(1 for obj in objects if obj.class_id == 0)
+        vehicle_count = sum(1 for obj in objects if obj.class_id in [1, 2, 3, 5, 7])
 
         # Telemetry text elements
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        hud_left = f"IBVAP | Frame: {frame_idx}/{total_frames} | FPS: {fps:.1f} | {timestamp}"
-        hud_right = f"Humans: {human_count} | Vehicles: {vehicle_count} | Total Targets: {len(detections)}"
+        mode_tag = "TRACKING (ByteTrack)" if self.enable_tracking else "DETECTION"
+        hud_left = f"IBVAP | {mode_tag} | Frame: {frame_idx}/{total_frames} | FPS: {fps:.1f} | {timestamp}"
+        hud_right = f"Humans: {human_count} | Vehicles: {vehicle_count} | Active: {len(objects)}"
 
         # Render HUD text
         font = cv2.FONT_HERSHEY_SIMPLEX
-        cv2.putText(frame, hud_left, (15, 26), font, 0.55, (0, 255, 200), 1, cv2.LINE_AA)
+        cv2.putText(frame, hud_left, (15, 26), font, 0.52, (0, 255, 200), 1, cv2.LINE_AA)
 
         # Calculate right-aligned position
-        (right_w, _), _ = cv2.getTextSize(hud_right, font, 0.55, 1)
-        cv2.putText(frame, hud_right, (w - right_w - 15, 26), font, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+        (right_w, _), _ = cv2.getTextSize(hud_right, font, 0.52, 1)
+        cv2.putText(frame, hud_right, (w - right_w - 15, 26), font, 0.52, (255, 255, 255), 1, cv2.LINE_AA)
 
         return frame
 
@@ -100,7 +127,7 @@ class VideoRenderer:
         display_live: bool = False,
     ) -> str:
         """
-        Process a video file frame-by-frame, detect objects, annotate, and save output.
+        Process a video file frame-by-frame with tracking/detection, annotate, and save output.
 
         :param input_video_path: Path to source raw video.
         :param output_video_path: Destination path for annotated video.
@@ -115,7 +142,7 @@ class VideoRenderer:
         if output_video_path is None:
             processed_dir = PROJECT_ROOT / "data" / "processed" / "videos"
             processed_dir.mkdir(parents=True, exist_ok=True)
-            output_video_path = str(processed_dir / f"processed_{input_path.name}")
+            output_video_path = str(processed_dir / f"tracked_{input_path.name}")
 
         output_path = Path(output_video_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,13 +159,14 @@ class VideoRenderer:
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
 
-        print(f"\n[IBVAP-Renderer] Processing video: '{input_path.name}'")
+        mode_desc = "ByteTrack Tracking + Trajectories" if self.enable_tracking else "Pure Detection"
+        print(f"\n[IBVAP-Renderer] Processing video: '{input_path.name}' ({mode_desc})")
         print(f"  • Resolution: {width}x{height}")
         print(f"  • FPS: {fps:.2f}")
         print(f"  • Total Frames: {total_frames}")
         print(f"  • Output Destination: '{output_path}'\n")
 
-        pbar = tqdm(total=total_frames, desc="Rendering Frames", unit="frame")
+        pbar = tqdm(total=total_frames, desc="Processing Video", unit="frame")
         frame_idx = 0
         t_start = time.time()
 
@@ -151,18 +179,26 @@ class VideoRenderer:
                 frame_idx += 1
                 t_frame_start = time.time()
 
-                # Step 1: Detect objects using YOLO11
-                detections = self.detector.detect(frame)
-
-                # Step 2: Draw detection bounding boxes & class tags
-                annotated_frame = self.detector.draw_detections(frame, detections)
+                if self.enable_tracking:
+                    # Step 1: Run ByteTrack tracking
+                    tracked_objects = self.tracker.track(frame, frame_id=frame_idx)
+                    # Step 2: Draw persistent IDs and motion trajectories
+                    annotated_frame = self.tracker.draw_tracks(
+                        frame, tracked_objects, draw_trajectories=self.draw_trajectories
+                    )
+                    current_items = tracked_objects
+                else:
+                    # Pure detection fallback
+                    detections = self.detector.detect(frame)
+                    annotated_frame = self.detector.draw_detections(frame, detections)
+                    current_items = detections
 
                 # Step 3: Draw Surveillance HUD
                 if self.show_hud:
                     elapsed = time.time() - t_frame_start
                     instant_fps = 1.0 / elapsed if elapsed > 0 else fps
                     annotated_frame = self._draw_surveillance_hud(
-                        annotated_frame, frame_idx, total_frames, instant_fps, detections
+                        annotated_frame, frame_idx, total_frames, instant_fps, current_items
                     )
 
                 # Step 4: Write to output video
@@ -192,12 +228,16 @@ class VideoRenderer:
 
 
 if __name__ == "__main__":
-    # Test execution using the uploaded raw video
     default_input = PROJECT_ROOT / "data" / "raw" / "videos" / "college_campus_raw.mp4"
-    default_output = PROJECT_ROOT / "data" / "processed" / "videos" / "college_campus_processed.mp4"
+    default_output = PROJECT_ROOT / "data" / "processed" / "videos" / "college_campus_tracked.mp4"
 
     if default_input.exists():
-        renderer = VideoRenderer(model_path="yolo11n.pt", conf_threshold=0.35)
+        renderer = VideoRenderer(
+            model_path="models/detection/yolo11n.pt",
+            enable_tracking=True,
+            conf_threshold=0.35,
+            draw_trajectories=True,
+        )
         renderer.process_video(
             input_video_path=str(default_input),
             output_video_path=str(default_output),
