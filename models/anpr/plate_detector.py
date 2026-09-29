@@ -52,7 +52,10 @@ def train_plate_model(
 
     # 2. Setup MLflow Tracking (Using SQLite backend)
     db_path = PROJECT_ROOT / "mlflow.db"
-    mlflow.set_tracking_uri(f"sqlite:///{db_path.as_posix()}")
+    tracking_uri = f"sqlite:///{db_path.as_posix()}"
+    os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
+    os.environ["MLFLOW_EXPERIMENT_NAME"] = experiment_name
+    mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment_name)
 
     print("=" * 75)
@@ -83,6 +86,7 @@ def train_plate_model(
         model = YOLO(str(base_model_path))
 
         # Execute YOLO Training
+        # NOTE: workers=0 required on Windows to avoid DataLoader multiprocessing crash
         results = model.train(
             data=str(yaml_path),
             epochs=epochs,
@@ -93,6 +97,7 @@ def train_plate_model(
             name="yolo11_plate_run",
             exist_ok=True,
             verbose=True,
+            workers=0,
         )
 
         # Log Metrics to MLflow and export to metrics.json for DVC

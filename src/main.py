@@ -1,7 +1,7 @@
 """
 =============================================================================
 IBVAP - Intelligent Border Video Analytics Platform
-Main Entry Point (Stage 2: Detection + ByteTrack Tracking)
+Main Entry Point (Stage 3: Detection + ByteTrack Tracking + ANPR)
 =============================================================================
 """
 
@@ -40,7 +40,13 @@ def main():
         "-m",
         type=str,
         default="models/detection/yolo11n.pt",
-        help="Path to YOLO11 model weights (.pt)",
+        help="Path to YOLO11 base detection model weights (.pt)",
+    )
+    parser.add_argument(
+        "--plate-model",
+        type=str,
+        default="models/anpr/plate_detector.pt",
+        help="Path to custom trained license plate YOLO model (.pt)",
     )
     parser.add_argument(
         "--conf",
@@ -48,6 +54,11 @@ def main():
         type=float,
         default=0.35,
         help="Confidence threshold for object detection (0.0 - 1.0)",
+    )
+    parser.add_argument(
+        "--anpr",
+        action="store_true",
+        help="Enable Automatic Number Plate Recognition (ANPR) on tracked vehicles",
     )
     parser.add_argument(
         "--no-track",
@@ -76,24 +87,39 @@ def main():
 
     enable_tracking = not args.no_track
     draw_trajectories = not args.no_trail
+    enable_anpr = args.anpr
 
-    mode_name = "ByteTrack Tracking + Trajectories" if enable_tracking else "Pure Detection"
+    modes = []
+    if enable_tracking:
+        modes.append("ByteTrack Tracking")
+    else:
+        modes.append("Detection Only")
+    if enable_anpr:
+        modes.append("ANPR License Plate Recognition")
+    if draw_trajectories:
+        modes.append(f"Trajectories ({args.trail_length} pts)")
 
-    print("=" * 70)
+    mode_str = " + ".join(modes)
+
+    print("=" * 75)
     print(" 🛡️  IBVAP - Intelligent Border Video Analytics Platform")
-    print("=" * 70)
-    print(f" • Mode:         {mode_name}")
-    print(f" • Input Video:  {args.input}")
-    print(f" • Model:        {args.model}")
-    print(f" • Confidence:   {args.conf}")
-    print(f" • Trajectories: {draw_trajectories} (max {args.trail_length} pts)")
-    print(f" • Live Preview: {args.live}")
-    print("=" * 70)
+    print("=" * 75)
+    print(f" • Active Pipeline: {mode_str}")
+    print(f" • Input Video:     {args.input}")
+    print(f" • Detection Model: {args.model}")
+    print(f" • ANPR Enabled:    {enable_anpr}")
+    if enable_anpr:
+        print(f" • Plate Model:     {args.plate_model}")
+    print(f" • Confidence:      {args.conf}")
+    print(f" • Live Preview:    {args.live}")
+    print("=" * 75)
 
-    # Initialize Video Renderer with ByteTrack
+    # Initialize Video Renderer with ByteTrack + ANPR
     renderer = VideoRenderer(
         model_path=args.model,
+        plate_model_path=args.plate_model,
         enable_tracking=enable_tracking,
+        enable_anpr=enable_anpr,
         conf_threshold=args.conf,
         show_hud=True,
         draw_trajectories=draw_trajectories,

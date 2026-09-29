@@ -1,0 +1,34 @@
+schema: '2.0'
+stages:
+  train_plate_detector:
+    cmd: python models/anpr/plate_detector.py --epochs 15 --batch 6 --imgsz 640 
+      --lr 0.01
+    deps:
+    - path: configs/anpr_data.yaml
+      hash: md5
+      md5: 76b36ccb02cc80ced5f5eb8d0a8038e2
+      size: 568
+    - path: data/dataset/anpr
+      hash: md5
+      md5: 7c702456cc1012d68c9234ece65751b2.dir
+      size: 212706722
+      nfiles: 868
+    - path: models/anpr/plate_detector.py
+      hash: md5
+      md5: 3717536c4d0e911924cb1fff0d184e55
+      size: 5608
+    params:
+      params.yaml:
+        train_anpr.batch_size: 6
+        train_anpr.epochs: 15
+        train_anpr.imgsz: 640
+        train_anpr.learning_rate: 0.01
+    outs:
+    - path: metrics.json
+      hash: md5
+      md5: 63ec9711850b51ec632581ab803a8136
+      size: 153
+    - path: models/anpr/plate_detector.pt
+      hash: md5
+      md5: 3ba716425e9d7b44ec261bc696d458c4
+      size: 5467411

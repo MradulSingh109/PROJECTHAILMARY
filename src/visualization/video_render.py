@@ -1,7 +1,7 @@
 """
 =============================================================================
 IBVAP - Intelligent Border Video Analytics Platform
-Module: Video Rendering & Processing Pipeline (Stage 2: Detection + Tracking)
+Module: Video Rendering & Processing Pipeline (Stage 3: Detection + Tracking + ANPR)
 =============================================================================
 """
 
@@ -22,11 +22,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from models.detection.detector import YOLO11Detector, DetectionResult
 from src.tracking.tracker import ByteTrackTracker
 from src.tracking.object_identity import TrackedObject
+from src.anpr.anpr_pipeline import ANPRPipeline, ANPRResult
 
 
 class VideoRenderer:
     """
-    Renders and processes raw video streams frame-by-frame using YOLO11 + ByteTrack,
+    Renders and processes raw video streams frame-by-frame using YOLO11 + ByteTrack + ANPR,
     displaying real-time surveillance HUD telemetry, trajectory trails, and writing processed outputs.
     """
 
@@ -34,8 +35,11 @@ class VideoRenderer:
         self,
         tracker: Optional[ByteTrackTracker] = None,
         detector: Optional[YOLO11Detector] = None,
+        anpr_pipeline: Optional[ANPRPipeline] = None,
         model_path: str = "models/detection/yolo11n.pt",
+        plate_model_path: str = "models/anpr/plate_detector.pt",
         enable_tracking: bool = True,
+        enable_anpr: bool = False,
         conf_threshold: float = 0.35,
         target_classes: Optional[List[int]] = None,
         show_hud: bool = True,
@@ -45,15 +49,19 @@ class VideoRenderer:
         """
         :param tracker: Optional ByteTrackTracker instance.
         :param detector: Optional YOLO11Detector instance.
-        :param model_path: Model weights path if instantiating tracker/detector.
-        :param enable_tracking: If True, executes ByteTrack tracking with persistent IDs & motion trails.
+        :param anpr_pipeline: Optional ANPRPipeline instance.
+        :param model_path: Base detection model weights.
+        :param plate_model_path: Custom license plate detector weights.
+        :param enable_tracking: If True, executes ByteTrack tracking.
+        :param enable_anpr: If True, executes Automatic Number Plate Recognition on vehicles.
         :param conf_threshold: Detection confidence threshold.
         :param target_classes: Class IDs to track/detect.
         :param show_hud: Whether to render surveillance telemetry header on the output.
         :param draw_trajectories: Whether to render trailing motion paths.
-        :param max_trajectory_points: Maximum historical trailing points to render (controls trailing distance).
+        :param max_trajectory_points: Maximum historical trailing points to render.
         """
         self.enable_tracking = enable_tracking
+        self.enable_anpr = enable_anpr
         self.show_hud = show_hud
         self.draw_trajectories = draw_trajectories
         self.max_trajectory_points = max_trajectory_points
@@ -80,6 +88,17 @@ class VideoRenderer:
                     target_classes=target_classes,
                 )
 
+        if self.enable_anpr:
+            if anpr_pipeline is not None:
+                self.anpr_pipeline = anpr_pipeline
+            else:
+                self.anpr_pipeline = ANPRPipeline(
+                    plate_model_path=plate_model_path,
+                    conf_threshold=conf_threshold,
+                )
+        else:
+            self.anpr_pipeline = None
+
     def _draw_surveillance_hud(
         self,
         frame: np.ndarray,
@@ -87,6 +106,7 @@ class VideoRenderer:
         total_frames: int,
         fps: float,
         objects: Union[List[TrackedObject], List[DetectionResult]],
+        anpr_results: Optional[List[ANPRResult]] = None,
     ) -> np.ndarray:
         """
         Renders an advanced, dark-themed top HUD bar with surveillance telemetry.
@@ -103,20 +123,31 @@ class VideoRenderer:
         # Count humans and vehicles
         human_count = sum(1 for obj in objects if obj.class_id == 0)
         vehicle_count = sum(1 for obj in objects if obj.class_id in [1, 2, 3, 5, 7])
+        plate_count = len(anpr_results) if anpr_results else 0
 
         # Telemetry text elements
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        mode_tag = "TRACKING (ByteTrack)" if self.enable_tracking else "DETECTION"
-        hud_left = f"IBVAP | {mode_tag} | Frame: {frame_idx}/{total_frames} | FPS: {fps:.1f} | {timestamp}"
-        hud_right = f"Humans: {human_count} | Vehicles: {vehicle_count} | Active: {len(objects)}"
+        mode_tags = []
+        if self.enable_tracking:
+            mode_tags.append("TRACKING")
+        else:
+            mode_tags.append("DETECTION")
+        if self.enable_anpr:
+            mode_tags.append("ANPR")
+
+        mode_str = " + ".join(mode_tags)
+        hud_left = f"IBVAP | {mode_str} | Frame: {frame_idx}/{total_frames} | FPS: {fps:.1f} | {timestamp}"
+        hud_right = f"Humans: {human_count} | Vehicles: {vehicle_count}"
+        if self.enable_anpr:
+            hud_right += f" | Plates: {plate_count}"
+        hud_right += f" | Active: {len(objects)}"
 
         # Render HUD text
         font = cv2.FONT_HERSHEY_SIMPLEX
-        cv2.putText(frame, hud_left, (15, 26), font, 0.52, (0, 255, 200), 1, cv2.LINE_AA)
+        cv2.putText(frame, hud_left, (15, 26), font, 0.50, (0, 255, 200), 1, cv2.LINE_AA)
 
-        # Calculate right-aligned position
-        (right_w, _), _ = cv2.getTextSize(hud_right, font, 0.52, 1)
-        cv2.putText(frame, hud_right, (w - right_w - 15, 26), font, 0.52, (255, 255, 255), 1, cv2.LINE_AA)
+        (right_w, _), _ = cv2.getTextSize(hud_right, font, 0.50, 1)
+        cv2.putText(frame, hud_right, (w - right_w - 15, 26), font, 0.50, (255, 255, 255), 1, cv2.LINE_AA)
 
         return frame
 
@@ -127,7 +158,7 @@ class VideoRenderer:
         display_live: bool = False,
     ) -> str:
         """
-        Process a video file frame-by-frame with tracking/detection, annotate, and save output.
+        Process a video file frame-by-frame with tracking/detection and optional ANPR.
 
         :param input_video_path: Path to source raw video.
         :param output_video_path: Destination path for annotated video.
@@ -142,7 +173,8 @@ class VideoRenderer:
         if output_video_path is None:
             processed_dir = PROJECT_ROOT / "data" / "processed" / "videos"
             processed_dir.mkdir(parents=True, exist_ok=True)
-            output_video_path = str(processed_dir / f"tracked_{input_path.name}")
+            tag = "anpr_" if self.enable_anpr else "tracked_"
+            output_video_path = str(processed_dir / f"{tag}{input_path.name}")
 
         output_path = Path(output_video_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -159,7 +191,13 @@ class VideoRenderer:
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
 
-        mode_desc = "ByteTrack Tracking + Trajectories" if self.enable_tracking else "Pure Detection"
+        modes = []
+        if self.enable_tracking:
+            modes.append("ByteTrack")
+        if self.enable_anpr:
+            modes.append("ANPR")
+        mode_desc = " + ".join(modes) if modes else "Detection"
+
         print(f"\n[IBVAP-Renderer] Processing video: '{input_path.name}' ({mode_desc})")
         print(f"  • Resolution: {width}x{height}")
         print(f"  • FPS: {fps:.2f}")
@@ -178,6 +216,7 @@ class VideoRenderer:
 
                 frame_idx += 1
                 t_frame_start = time.time()
+                anpr_results: Optional[List[ANPRResult]] = None
 
                 if self.enable_tracking:
                     # Step 1: Run ByteTrack tracking
@@ -187,21 +226,30 @@ class VideoRenderer:
                         frame, tracked_objects, draw_trajectories=self.draw_trajectories
                     )
                     current_items = tracked_objects
+
+                    # Step 3: Run ANPR if enabled
+                    if self.enable_anpr and self.anpr_pipeline:
+                        anpr_results = self.anpr_pipeline.process_vehicles(
+                            frame, tracked_objects, frame_id=frame_idx
+                        )
+                        annotated_frame = self.anpr_pipeline.draw_anpr_annotations(
+                            annotated_frame, anpr_results, tracked_objects
+                        )
                 else:
                     # Pure detection fallback
                     detections = self.detector.detect(frame)
                     annotated_frame = self.detector.draw_detections(frame, detections)
                     current_items = detections
 
-                # Step 3: Draw Surveillance HUD
+                # Step 4: Draw Surveillance HUD
                 if self.show_hud:
                     elapsed = time.time() - t_frame_start
                     instant_fps = 1.0 / elapsed if elapsed > 0 else fps
                     annotated_frame = self._draw_surveillance_hud(
-                        annotated_frame, frame_idx, total_frames, instant_fps, current_items
+                        annotated_frame, frame_idx, total_frames, instant_fps, current_items, anpr_results
                     )
 
-                # Step 4: Write to output video
+                # Step 5: Write to output video
                 out.write(annotated_frame)
                 pbar.update(1)
 
@@ -229,12 +277,12 @@ class VideoRenderer:
 
 if __name__ == "__main__":
     default_input = PROJECT_ROOT / "data" / "raw" / "videos" / "college_campus_raw.mp4"
-    default_output = PROJECT_ROOT / "data" / "processed" / "videos" / "college_campus_tracked.mp4"
+    default_output = PROJECT_ROOT / "data" / "processed" / "videos" / "college_campus_anpr.mp4"
 
     if default_input.exists():
         renderer = VideoRenderer(
-            model_path="models/detection/yolo11n.pt",
             enable_tracking=True,
+            enable_anpr=True,
             conf_threshold=0.35,
             draw_trajectories=True,
         )

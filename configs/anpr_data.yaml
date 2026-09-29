@@ -2,7 +2,7 @@
 # IBVAP - ANPR License Plate Dataset Configuration for YOLO Training
 # ==============================================================================
 
-path: ../data/dataset/anpr  # dataset root dir (relative to training script or absolute)
+path: D:\PROJECTHAILMARY\data\dataset\anpr  # absolute path - avoids Ultralytics relative resolution issues
 train: train/images         # train images (relative to 'path')
 val: val/images             # val images (relative to 'path')
 test: test/images           # test images (optional)

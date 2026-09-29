@@ -18,6 +18,13 @@ pydantic>=2.0.0
 # Geometry & Analytics (Intrusion/Zones)
 shapely>=2.0.0
 
+# OCR & Text Recognition
+easyocr>=1.7.0
+
+# MLOps, Experiment Tracking & Data Versioning
+mlflow>=2.10.0
+dvc>=3.0.0
+
 # Utilities, Logging & Visualization
 tqdm>=4.65.0
 matplotlib>=3.7.0
