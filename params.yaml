@@ -1,0 +1,12 @@
+# ==============================================================================
+# IBVAP - ANPR Plate Detector Experiment Parameters
+# ==============================================================================
+
+train_anpr:
+  data_yaml: "configs/anpr_data.yaml"
+  base_model: "models/detection/yolo11n.pt"
+  epochs: 15
+  batch_size: 6
+  imgsz: 640
+  learning_rate: 0.01
+  device: "0" # Set to "cpu" or "0" for GPU

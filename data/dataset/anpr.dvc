@@ -1,0 +1,6 @@
+outs:
+- md5: 7c702456cc1012d68c9234ece65751b2.dir
+  size: 212706722
+  nfiles: 868
+  hash: md5
+  path: anpr

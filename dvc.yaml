@@ -1,0 +1,21 @@
+# ==============================================================================
+# IBVAP - DVC Pipeline & Experiment Workflow
+# ==============================================================================
+
+stages:
+  train_plate_detector:
+    cmd: "python models/anpr/plate_detector.py --epochs ${train_anpr.epochs} --batch ${train_anpr.batch_size} --imgsz ${train_anpr.imgsz} --lr ${train_anpr.learning_rate}"
+    deps:
+      - configs/anpr_data.yaml
+      - data/dataset/anpr
+      - models/anpr/plate_detector.py
+    params:
+      - train_anpr.epochs
+      - train_anpr.batch_size
+      - train_anpr.imgsz
+      - train_anpr.learning_rate
+    outs:
+      - models/anpr/plate_detector.pt
+    metrics:
+      - metrics.json:
+          cache: false
