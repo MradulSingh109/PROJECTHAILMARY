@@ -1,0 +1,31 @@
+# ============================================================================
+# IBVAP - local video inference and model training dependencies
+# ============================================================================
+
+# Core Deep Learning & Computer Vision
+torch>=2.0.0
+torchvision>=0.15.0
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=9.5.0
+lap>=0.5.12
+
+# Configuration & Data Management
+PyYAML>=6.0.0
+pydantic>=2.0.0
+
+# Geometry & Analytics
+shapely>=2.0.0
+
+# OCR & Text Recognition
+easyocr>=1.7.0
+
+# MLOps, Experiment Tracking & Data Versioning
+mlflow>=2.10.0
+dvc>=3.0.0
+
+# Utilities & Visualization
+tqdm>=4.65.0
+matplotlib>=3.7.0
+ipykernel>=6.20.0
