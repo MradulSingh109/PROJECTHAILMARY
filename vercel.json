@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/", "destination": "/src/main" },
+    { "source": "/health", "destination": "/src/main?health=1" }
+  ],
+  "functions": {
+    "src/main.py": {
+      "excludeFiles": "{data/**,models/**,mlruns/**,runs/**,tests/**,.venv/**,.git/**,**/__pycache__/**,**/*.pyc,*.db}"
+    }
+  }
+}
