@@ -83,10 +83,9 @@ dvc.yaml, params.yaml    DVC pipeline and training parameters
 ## Requirements
 
 - Python 3.10+ is recommended.
-- For the Vercel showcase page, no third-party Python packages are required. The standard `requirements.txt` is intentionally lightweight.
-- For local video inference and model training, install PyTorch and the packages in `requirements-ml.txt` (including Ultralytics, OpenCV, EasyOCR, MLflow, and DVC).
+- PyTorch and the packages in `requirements.txt` (including Ultralytics, OpenCV, EasyOCR, MLflow, and DVC).
 - CPU inference is supported; a CUDA-compatible PyTorch installation and GPU can accelerate inference and training.
-- The base YOLO11 weights are checked in. The expected ANPR weight file is ignored by Git, so provide `models/anpr/plate_detector.pt` separately to run ANPR. EasyOCR may download its recognition data on first use.
+- The repository includes YOLO11 and plate-detector weight files. EasyOCR may download its recognition data on first use.
 
 ## Installation
 
@@ -101,7 +100,7 @@ Windows PowerShell:
 ```powershell
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -r requirements-ml.txt
+python -m pip install -r requirements.txt
 ```
 
 macOS/Linux:
@@ -109,7 +108,7 @@ macOS/Linux:
 ```bash
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -r requirements-ml.txt
+python -m pip install -r requirements.txt
 ```
 
 Install the PyTorch build appropriate for your CPU/CUDA setup before or as part of dependency installation if the default package resolver does not select the desired build. For a clean clone, confirm the model weights and sample videos are present; large assets may be managed separately through Git LFS or DVC depending on repository distribution.
@@ -206,10 +205,6 @@ The DVC stage also expects the training dataset and training script paths listed
 - Trajectory helpers provide pixel-space motion measurements. They do not perform calibrated real-world speed estimation, geofencing, or automated threat classification.
 - ANPR depends on a trained plate model and EasyOCR; recognition should be reviewed by a human in operational settings.
 - Use only video and plate data you are authorized to process, and apply appropriate privacy, retention, and access controls when adapting the prototype.
-
-### Vercel showcase deployment
-
-The Vercel entry point is the lightweight showcase handler exported by `src/main.py`; `/` serves the project page and `/health` returns service status. The deployed page presents the project and does not run video inference or accept uploads. The local computer-vision and training dependencies are kept in `requirements-ml.txt` and are not installed for the showcase deployment.
 
 ## License and contribution
 
