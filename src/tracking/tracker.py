@@ -9,7 +9,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union
 import cv2
 import numpy as np
 from ultralytics import YOLO
@@ -186,6 +186,7 @@ class ByteTrackTracker:
         frame: np.ndarray,
         tracked_objects: List[TrackedObject],
         draw_trajectories: bool = True,
+        intruder_ids: Optional[Union[Set[int], List[int]]] = None,
     ) -> np.ndarray:
         """
         Render persistent track IDs, bounding boxes, target labels, and trajectory trails.
@@ -193,10 +194,12 @@ class ByteTrackTracker:
         :param frame: BGR input frame.
         :param tracked_objects: List of TrackedObject instances.
         :param draw_trajectories: Whether to render trailing motion paths.
+        :param intruder_ids: Set or list of track IDs that have breached the perimeter.
         :return: Annotated BGR frame.
         """
         annotated = frame.copy()
         active_ids = [obj.track_id for obj in tracked_objects]
+        intruder_set = set(intruder_ids) if intruder_ids else set()
 
         # Step 1: Draw motion trajectory trails
         if draw_trajectories:
@@ -212,20 +215,26 @@ class ByteTrackTracker:
         for obj in tracked_objects:
             x1, y1, x2, y2 = map(int, obj.bbox)
             t_id = obj.track_id
+            is_intruder = t_id in intruder_set
 
-            # Dynamic color coding: Human (Orange), Vehicles (Cyan/Yellow), Default (Teal)
-            if obj.class_id == 0:  # Person
-                color = (0, 165, 255)
-            elif obj.class_id in [1, 2, 3, 5, 7]:  # Vehicles
-                color = (255, 200, 0)
+            if is_intruder:
+                # Active intruder: Bold RED bounding box and intruder alert label
+                color = (0, 0, 255)  # Red (BGR)
+                box_thickness = 3
+                label = f"INTRUDER #{t_id} | {obj.class_name} {obj.confidence:.2f}"
             else:
-                color = (0, 255, 128)
+                box_thickness = 2
+                # Dynamic color coding: Human (Orange), Vehicles (Cyan/Yellow), Default (Teal)
+                if obj.class_id == 0:  # Person
+                    color = (0, 165, 255)
+                elif obj.class_id in [1, 2, 3, 5, 7]:  # Vehicles
+                    color = (255, 200, 0)
+                else:
+                    color = (0, 255, 128)
+                label = f"ID: #{t_id} | {obj.class_name} {obj.confidence:.2f}"
 
             # Draw bounding box
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-
-            # Label banner: e.g. "ID: #17 | person 0.91"
-            label = f"ID: #{t_id} | {obj.class_name} {obj.confidence:.2f}"
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, box_thickness)
 
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.50
@@ -238,13 +247,14 @@ class ByteTrackTracker:
             banner_x2 = x1 + w_txt + 8
 
             cv2.rectangle(annotated, (banner_x1, banner_y1), (banner_x2, banner_y2), color, -1)
+            text_color = (255, 255, 255) if is_intruder else (0, 0, 0)
             cv2.putText(
                 annotated,
                 label,
                 (banner_x1 + 4, banner_y2 - 3),
                 font,
                 font_scale,
-                (0, 0, 0),
+                text_color,
                 font_thickness,
                 lineType=cv2.LINE_AA,
             )
