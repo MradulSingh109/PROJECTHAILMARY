@@ -23,6 +23,8 @@ from models.detection.detector import YOLO11Detector, DetectionResult
 from src.tracking.tracker import ByteTrackTracker
 from src.tracking.object_identity import TrackedObject
 from src.anpr.anpr_pipeline import ANPRPipeline, ANPRResult
+from src.analytics.intrusion_detector import IntrusionDetector
+from src.analytics.fence_zone import IntrusionEvent, VirtualFence, FenceType, CrossingDirection
 
 
 class VideoRenderer:
@@ -36,10 +38,12 @@ class VideoRenderer:
         tracker: Optional[ByteTrackTracker] = None,
         detector: Optional[YOLO11Detector] = None,
         anpr_pipeline: Optional[ANPRPipeline] = None,
+        intrusion_detector: Optional[IntrusionDetector] = None,
         model_path: str = "models/detection/yolo11n.pt",
         plate_model_path: str = "models/anpr/plate_detector.pt",
         enable_tracking: bool = True,
         enable_anpr: bool = False,
+        enable_fence: bool = False,
         conf_threshold: float = 0.35,
         target_classes: Optional[List[int]] = None,
         show_hud: bool = True,
@@ -50,10 +54,12 @@ class VideoRenderer:
         :param tracker: Optional ByteTrackTracker instance.
         :param detector: Optional YOLO11Detector instance.
         :param anpr_pipeline: Optional ANPRPipeline instance.
+        :param intrusion_detector: Optional IntrusionDetector instance.
         :param model_path: Base detection model weights.
         :param plate_model_path: Custom license plate detector weights.
         :param enable_tracking: If True, executes ByteTrack tracking.
         :param enable_anpr: If True, executes Automatic Number Plate Recognition on vehicles.
+        :param enable_fence: If True, executes Virtual Fence Intrusion Detection.
         :param conf_threshold: Detection confidence threshold.
         :param target_classes: Class IDs to track/detect.
         :param show_hud: Whether to render surveillance telemetry header on the output.
@@ -62,9 +68,11 @@ class VideoRenderer:
         """
         self.enable_tracking = enable_tracking
         self.enable_anpr = enable_anpr
+        self.enable_fence = enable_fence
         self.show_hud = show_hud
         self.draw_trajectories = draw_trajectories
         self.max_trajectory_points = max_trajectory_points
+        self.intrusion_detector = intrusion_detector
 
         if self.enable_tracking:
             if tracker is not None:
@@ -107,6 +115,7 @@ class VideoRenderer:
         fps: float,
         objects: Union[List[TrackedObject], List[DetectionResult]],
         anpr_results: Optional[List[ANPRResult]] = None,
+        intrusion_events: Optional[List[IntrusionEvent]] = None,
     ) -> np.ndarray:
         """
         Renders an advanced, dark-themed top HUD bar with surveillance telemetry.
@@ -124,6 +133,7 @@ class VideoRenderer:
         human_count = sum(1 for obj in objects if obj.class_id == 0)
         vehicle_count = sum(1 for obj in objects if obj.class_id in [1, 2, 3, 5, 7])
         plate_count = len(anpr_results) if anpr_results else 0
+        breach_count = self.intrusion_detector.total_breaches if self.intrusion_detector else 0
 
         # Telemetry text elements
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -134,20 +144,24 @@ class VideoRenderer:
             mode_tags.append("DETECTION")
         if self.enable_anpr:
             mode_tags.append("ANPR")
+        if self.enable_fence:
+            mode_tags.append("VIRTUAL_FENCE")
 
         mode_str = " + ".join(mode_tags)
         hud_left = f"IBVAP | {mode_str} | Frame: {frame_idx}/{total_frames} | FPS: {fps:.1f} | {timestamp}"
         hud_right = f"Humans: {human_count} | Vehicles: {vehicle_count}"
         if self.enable_anpr:
             hud_right += f" | Plates: {plate_count}"
+        if self.enable_fence:
+            hud_right += f" | Breaches: {breach_count}"
         hud_right += f" | Active: {len(objects)}"
 
         # Render HUD text
         font = cv2.FONT_HERSHEY_SIMPLEX
-        cv2.putText(frame, hud_left, (15, 26), font, 0.50, (0, 255, 200), 1, cv2.LINE_AA)
+        cv2.putText(frame, hud_left, (15, 26), font, 0.45, (0, 255, 200), 1, cv2.LINE_AA)
 
-        (right_w, _), _ = cv2.getTextSize(hud_right, font, 0.50, 1)
-        cv2.putText(frame, hud_right, (w - right_w - 15, 26), font, 0.50, (255, 255, 255), 1, cv2.LINE_AA)
+        (right_w, _), _ = cv2.getTextSize(hud_right, font, 0.45, 1)
+        cv2.putText(frame, hud_right, (w - right_w - 15, 26), font, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
 
         return frame
 
@@ -158,7 +172,7 @@ class VideoRenderer:
         display_live: bool = False,
     ) -> str:
         """
-        Process a video file frame-by-frame with tracking/detection and optional ANPR.
+        Process a video file frame-by-frame with tracking/detection, ANPR, and Virtual Fence Intrusion.
 
         :param input_video_path: Path to source raw video.
         :param output_video_path: Destination path for annotated video.
@@ -173,7 +187,12 @@ class VideoRenderer:
         if output_video_path is None:
             processed_dir = PROJECT_ROOT / "data" / "processed" / "videos"
             processed_dir.mkdir(parents=True, exist_ok=True)
-            tag = "anpr_" if self.enable_anpr else "tracked_"
+            if self.enable_fence:
+                tag = "fence_"
+            elif self.enable_anpr:
+                tag = "anpr_"
+            else:
+                tag = "tracked_"
             output_video_path = str(processed_dir / f"{tag}{input_path.name}")
 
         output_path = Path(output_video_path)
@@ -196,6 +215,8 @@ class VideoRenderer:
             modes.append("ByteTrack")
         if self.enable_anpr:
             modes.append("ANPR")
+        if self.enable_fence:
+            modes.append("Virtual Fence Intrusion")
         mode_desc = " + ".join(modes) if modes else "Detection"
 
         print(f"\n[IBVAP-Renderer] Processing video: '{input_path.name}' ({mode_desc})")
@@ -217,17 +238,26 @@ class VideoRenderer:
                 frame_idx += 1
                 t_frame_start = time.time()
                 anpr_results: Optional[List[ANPRResult]] = None
+                intrusion_events: Optional[List[IntrusionEvent]] = None
 
                 if self.enable_tracking:
                     # Step 1: Run ByteTrack tracking
                     tracked_objects = self.tracker.track(frame, frame_id=frame_idx)
-                    # Step 2: Draw persistent IDs and motion trajectories
+
+                    # Step 2: Run Virtual Fence Intrusion Detection if enabled (updates active_intruders)
+                    if self.enable_fence and self.intrusion_detector:
+                        intrusion_events = self.intrusion_detector.process_frame(
+                            frame, tracked_objects, self.tracker.trajectory_manager, frame_id=frame_idx
+                        )
+
+                    # Step 3: Draw persistent IDs, motion trajectories, and Red intruder boxes
+                    intruder_ids = self.intrusion_detector.active_intruders if (self.enable_fence and self.intrusion_detector) else None
                     annotated_frame = self.tracker.draw_tracks(
-                        frame, tracked_objects, draw_trajectories=self.draw_trajectories
+                        frame, tracked_objects, draw_trajectories=self.draw_trajectories, intruder_ids=intruder_ids
                     )
                     current_items = tracked_objects
 
-                    # Step 3: Run ANPR if enabled
+                    # Step 4: Run ANPR if enabled
                     if self.enable_anpr and self.anpr_pipeline:
                         anpr_results = self.anpr_pipeline.process_vehicles(
                             frame, tracked_objects, frame_id=frame_idx
@@ -235,18 +265,24 @@ class VideoRenderer:
                         annotated_frame = self.anpr_pipeline.draw_anpr_annotations(
                             annotated_frame, anpr_results, tracked_objects
                         )
+
+                    # Step 5: Render Virtual Fence overlay on top of frame
+                    if self.enable_fence and self.intrusion_detector:
+                        annotated_frame = self.intrusion_detector.render_overlay(
+                            annotated_frame, frame_id=frame_idx
+                        )
                 else:
                     # Pure detection fallback
                     detections = self.detector.detect(frame)
                     annotated_frame = self.detector.draw_detections(frame, detections)
                     current_items = detections
 
-                # Step 4: Draw Surveillance HUD
+                # Step 5: Draw Surveillance HUD
                 if self.show_hud:
                     elapsed = time.time() - t_frame_start
                     instant_fps = 1.0 / elapsed if elapsed > 0 else fps
                     annotated_frame = self._draw_surveillance_hud(
-                        annotated_frame, frame_idx, total_frames, instant_fps, current_items, anpr_results
+                        annotated_frame, frame_idx, total_frames, instant_fps, current_items, anpr_results, intrusion_events
                     )
 
                 # Step 5: Write to output video

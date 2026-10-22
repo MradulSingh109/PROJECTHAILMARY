@@ -1,7 +1,7 @@
 """
 =============================================================================
 IBVAP - Intelligent Border Video Analytics Platform
-Main Entry Point (Stage 3: Detection + ByteTrack Tracking + ANPR)
+Main Entry Point (Stage 3 & 4: Detection + Tracking + ANPR + Virtual Fence)
 =============================================================================
 """
 
@@ -17,6 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+
 def main():
     # Load the computer-vision stack only for the CLI workflow. Vercel imports
     # this module to serve the lightweight project page.
@@ -29,7 +30,7 @@ def main():
         "--input",
         "-i",
         type=str,
-        default=str(PROJECT_ROOT / "data" / "raw" / "videos" / "college_campus_raw.mp4"),
+        default=str(PROJECT_ROOT / "data" / "raw" / "videos" / "border_video.mp4"),
         help="Path to input raw video file or camera stream index/RTSP URL",
     )
     parser.add_argument(
@@ -65,6 +66,42 @@ def main():
         help="Enable Automatic Number Plate Recognition (ANPR) on tracked vehicles",
     )
     parser.add_argument(
+        "--fence",
+        action="store_true",
+        help="Enable Virtual Fence / Perimeter Intrusion Detection",
+    )
+    parser.add_argument(
+        "--fence-type",
+        type=str,
+        default="tripwire",
+        choices=["tripwire", "polygon_zone"],
+        help="Virtual fence geometry type ('tripwire' line or 'polygon_zone')",
+    )
+    parser.add_argument(
+        "--fence-coords",
+        type=str,
+        default="50,200,800,200",
+        help="Comma-separated coordinates: x1,y1,x2,y2 for line or x1,y1,x2,y2,x3,y3... for polygon",
+    )
+    parser.add_argument(
+        "--fence-dir",
+        type=str,
+        default="any",
+        choices=["any", "left_to_right", "right_to_left", "top_to_bottom", "bottom_to_top"],
+        help="Crossing direction to trigger alerts ('any', 'top_to_bottom', 'bottom_to_top', 'left_to_right', 'right_to_left')",
+    )
+    # parser.add_argument(
+    #     "--fence-name",
+    #     type=str,
+    #     default="Border Perimeter Sector Alpha",
+    #     help="Display name for the virtual fence boundary",
+    # )
+    parser.add_argument(
+        "--save-snapshots",
+        action="store_true",
+        help="Save cropped snapshot images of intruders when perimeter is breached",
+    )
+    parser.add_argument(
         "--no-track",
         action="store_true",
         help="Disable ByteTrack multi-object tracking (fall back to pure frame detection)",
@@ -92,6 +129,7 @@ def main():
     enable_tracking = not args.no_track
     draw_trajectories = not args.no_trail
     enable_anpr = args.anpr
+    enable_fence = args.fence
 
     modes = []
     if enable_tracking:
@@ -100,6 +138,8 @@ def main():
         modes.append("Detection Only")
     if enable_anpr:
         modes.append("ANPR License Plate Recognition")
+    if enable_fence:
+        modes.append(f"Virtual Fence Intrusion ({args.fence_type})")
     if draw_trajectories:
         modes.append(f"Trajectories ({args.trail_length} pts)")
 
@@ -114,16 +154,50 @@ def main():
     print(f" • ANPR Enabled:    {enable_anpr}")
     if enable_anpr:
         print(f" • Plate Model:     {args.plate_model}")
+    print(f" • Fence Enabled:   {enable_fence}")
+    if enable_fence:
+        # print(f" • Fence Name:      {args.fence_name}")
+        print(f" • Fence Coords:    {args.fence_coords}")
+        print(f" • Fence Direction: {args.fence_dir}")
     print(f" • Confidence:      {args.conf}")
     print(f" • Live Preview:    {args.live}")
     print("=" * 75)
 
-    # Initialize Video Renderer with ByteTrack + ANPR
+    # Initialize Intrusion Detector if enabled
+    intrusion_detector = None
+    if enable_fence:
+        from src.analytics.fence_zone import VirtualFence, FenceType, CrossingDirection
+        from src.analytics.intrusion_detector import IntrusionDetector
+
+        raw_coords = [int(v.strip()) for v in args.fence_coords.split(",") if v.strip()]
+        if len(raw_coords) % 2 != 0:
+            raise ValueError(f"Invalid coordinate count ({len(raw_coords)}). Must be pairs of X,Y.")
+
+        coord_pairs = [(raw_coords[i], raw_coords[i + 1]) for i in range(0, len(raw_coords), 2)]
+        f_type = FenceType.TRIPWIRE if args.fence_type == "tripwire" else FenceType.POLYGON_ZONE
+        f_dir = CrossingDirection(args.fence_dir)
+
+        fence = VirtualFence(
+            fence_id="fence_alpha",
+            # name=args.fence_name,
+            coordinates=coord_pairs,
+            fence_type=f_type,
+            direction=f_dir,
+            target_classes=[0],  # Alert on persons
+        )
+        intrusion_detector = IntrusionDetector(
+            fences=[fence],
+            save_snapshots=True,
+        )
+
+    # Initialize Video Renderer with ByteTrack + ANPR + Virtual Fence
     renderer = VideoRenderer(
         model_path=args.model,
         plate_model_path=args.plate_model,
         enable_tracking=enable_tracking,
         enable_anpr=enable_anpr,
+        enable_fence=enable_fence,
+        intrusion_detector=intrusion_detector,
         conf_threshold=args.conf,
         show_hud=True,
         draw_trajectories=draw_trajectories,
@@ -138,6 +212,8 @@ def main():
     )
 
     print("\n✅ Processing complete!")
+    if enable_fence and intrusion_detector:
+        print(f"🚨 Total Perimeter Breaches Detected: {intrusion_detector.total_breaches}")
     print(f"📁 Processed Video: {output_file}\n")
 
 

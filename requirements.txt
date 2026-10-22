@@ -1,2 +1,0 @@
-# The Vercel showcase handler uses only the Python standard library.
-# Full local inference and training dependencies are in requirements-ml.txt.
