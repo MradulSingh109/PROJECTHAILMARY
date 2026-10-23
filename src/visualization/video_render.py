@@ -148,7 +148,8 @@ class VideoRenderer:
             mode_tags.append("VIRTUAL_FENCE")
 
         mode_str = " + ".join(mode_tags)
-        hud_left = f"IBVAP | {mode_str} | Frame: {frame_idx}/{total_frames} | FPS: {fps:.1f} | {timestamp}"
+        frame_str = f"LIVE | Frame #{frame_idx}" if total_frames <= 0 else f"Frame: {frame_idx}/{total_frames}"
+        hud_left = f"IBVAP | {mode_str} | {frame_str} | FPS: {fps:.1f} | {timestamp}"
         hud_right = f"Humans: {human_count} | Vehicles: {vehicle_count}"
         if self.enable_anpr:
             hud_right += f" | Plates: {plate_count}"
@@ -179,34 +180,75 @@ class VideoRenderer:
         :param display_live: If True, opens an OpenCV window to display the stream live.
         :return: Path to the saved processed video.
         """
-        input_path = Path(input_video_path)
-        if not input_path.exists():
-            raise FileNotFoundError(f"Input video not found at: {input_path}")
+        # Determine whether input is a camera index, IP camera stream, or file
+        is_live_stream = False
+        raw_input = str(input_video_path).strip()
+
+        if raw_input.isdigit():
+            cap_source = int(raw_input)
+            is_live_stream = True
+            source_desc = f"Live Camera #{cap_source}"
+            file_stem = f"camera_{cap_source}"
+        elif raw_input.lower() in ["cam", "webcam", "0"]:
+            cap_source = 0
+            is_live_stream = True
+            source_desc = "Live Camera #0 (Webcam)"
+            file_stem = "webcam_0"
+        elif raw_input.startswith(("rtsp://", "http://", "https://")):
+            cap_source = raw_input
+            is_live_stream = True
+            source_desc = "IP Camera RTSP/HTTP Stream"
+            file_stem = "rtsp_stream"
+        else:
+            input_path = Path(input_video_path)
+            if not input_path.exists():
+                raise FileNotFoundError(f"Input video not found at: {input_path}")
+            cap_source = str(input_path)
+            source_desc = input_path.name
+            file_stem = input_path.stem
 
         # Default output path if not specified
         if output_video_path is None:
             processed_dir = PROJECT_ROOT / "data" / "processed" / "videos"
             processed_dir.mkdir(parents=True, exist_ok=True)
-            if self.enable_fence:
-                tag = "fence_"
-            elif self.enable_anpr:
-                tag = "anpr_"
+            if is_live_stream:
+                tag = "live_"
+                time_str = time.strftime("%Y%m%d_%H%M%S")
+                output_video_path = str(processed_dir / f"{tag}{file_stem}_{time_str}.mp4")
             else:
-                tag = "tracked_"
-            output_video_path = str(processed_dir / f"{tag}{input_path.name}")
+                tag = "fence_" if self.enable_fence else ("anpr_" if self.enable_anpr else "tracked_")
+                output_video_path = str(processed_dir / f"{tag}{file_stem}.mp4")
 
         output_path = Path(output_video_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        cap = cv2.VideoCapture(str(input_path))
+        cap = cv2.VideoCapture(cap_source)
         if not cap.isOpened():
-            raise RuntimeError(f"Failed to open video source: {input_path}")
+            raise RuntimeError(f"Failed to open video source: {source_desc}")
+
+        if is_live_stream:
+            # Low latency: limit internal buffer to 1 frame to prevent queue lag
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        if fps <= 0 or fps > 120:
+            fps = 30.0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames < 0:
+            total_frames = 0
 
+        # Auto-center any virtual fence configured for dynamic centering
+        if self.enable_fence and self.intrusion_detector:
+            for fence in self.intrusion_detector.fences:
+                if getattr(fence, "auto_center", False):
+                    y_mid = int(height * 0.50)
+                    x_left = int(width * 0.05)
+                    x_right = int(width * 0.95)
+                    fence.coordinates = [(x_left, y_mid), (x_right, y_mid)]
+
+        # FourCC and VideoWriter
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
 
@@ -219,13 +261,20 @@ class VideoRenderer:
             modes.append("Virtual Fence Intrusion")
         mode_desc = " + ".join(modes) if modes else "Detection"
 
-        print(f"\n[IBVAP-Renderer] Processing video: '{input_path.name}' ({mode_desc})")
+        print(f"\n[IBVAP-Renderer] Ingesting source: '{source_desc}' ({mode_desc})")
         print(f"  • Resolution: {width}x{height}")
-        print(f"  • FPS: {fps:.2f}")
-        print(f"  • Total Frames: {total_frames}")
+        print(f"  • Target FPS: {fps:.2f}")
+        if is_live_stream:
+            print("  • Mode: Live Streaming Feed (Press 'q' in preview window to stop)")
+        else:
+            print(f"  • Total Frames: {total_frames}")
         print(f"  • Output Destination: '{output_path}'\n")
 
-        pbar = tqdm(total=total_frames, desc="Processing Video", unit="frame")
+        if is_live_stream or total_frames <= 0:
+            pbar = tqdm(desc="Processing Live Stream", unit="frame")
+        else:
+            pbar = tqdm(total=total_frames, desc="Processing Video", unit="frame")
+
         frame_idx = 0
         t_start = time.time()
 

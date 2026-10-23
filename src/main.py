@@ -31,7 +31,13 @@ def main():
         "-i",
         type=str,
         default=str(PROJECT_ROOT / "data" / "raw" / "videos" / "border_video.mp4"),
-        help="Path to input raw video file or camera stream index/RTSP URL",
+        help="Path to input raw video file, camera stream index (e.g. 0), or RTSP URL",
+    )
+    parser.add_argument(
+        "--cam",
+        "--webcam",
+        action="store_true",
+        help="Use connected live webcam / camera feed (camera index 0)",
     )
     parser.add_argument(
         "--output",
@@ -80,8 +86,8 @@ def main():
     parser.add_argument(
         "--fence-coords",
         type=str,
-        default="50,200,800,200",
-        help="Comma-separated coordinates: x1,y1,x2,y2 for line or x1,y1,x2,y2,x3,y3... for polygon",
+        default=None,
+        help="Coordinates: x1,y1,x2,y2 for line. If omitted or 'auto', automatically centers across the video frame.",
     )
     parser.add_argument(
         "--fence-dir",
@@ -126,6 +132,10 @@ def main():
 
     args = parser.parse_args()
 
+    input_source = "0" if args.cam else args.input
+    is_live_camera = args.cam or str(input_source).strip().isdigit() or str(input_source).startswith(("rtsp://", "http://", "https://"))
+    display_live = args.live or is_live_camera
+
     enable_tracking = not args.no_track
     draw_trajectories = not args.no_trail
     enable_anpr = args.anpr
@@ -144,12 +154,13 @@ def main():
         modes.append(f"Trajectories ({args.trail_length} pts)")
 
     mode_str = " + ".join(modes)
+    source_label = "Live Webcam (Camera #0)" if args.cam else input_source
 
     print("=" * 75)
     print(" 🛡️  IBVAP - Intelligent Border Video Analytics Platform")
     print("=" * 75)
     print(f" • Active Pipeline: {mode_str}")
-    print(f" • Input Video:     {args.input}")
+    print(f" • Input Source:    {source_label}")
     print(f" • Detection Model: {args.model}")
     print(f" • ANPR Enabled:    {enable_anpr}")
     if enable_anpr:
@@ -160,7 +171,7 @@ def main():
         print(f" • Fence Coords:    {args.fence_coords}")
         print(f" • Fence Direction: {args.fence_dir}")
     print(f" • Confidence:      {args.conf}")
-    print(f" • Live Preview:    {args.live}")
+    print(f" • Live Preview:    {display_live}")
     print("=" * 75)
 
     # Initialize Intrusion Detector if enabled
@@ -169,11 +180,21 @@ def main():
         from src.analytics.fence_zone import VirtualFence, FenceType, CrossingDirection
         from src.analytics.intrusion_detector import IntrusionDetector
 
-        raw_coords = [int(v.strip()) for v in args.fence_coords.split(",") if v.strip()]
-        if len(raw_coords) % 2 != 0:
-            raise ValueError(f"Invalid coordinate count ({len(raw_coords)}). Must be pairs of X,Y.")
+        auto_center = False
+        coords_specified = args.fence_coords and args.fence_coords.strip().lower() not in ("auto", "center")
 
-        coord_pairs = [(raw_coords[i], raw_coords[i + 1]) for i in range(0, len(raw_coords), 2)]
+        if coords_specified:
+            raw_coords = [int(v.strip()) for v in args.fence_coords.split(",") if v.strip()]
+            if len(raw_coords) % 2 != 0:
+                raise ValueError(f"Invalid coordinate count ({len(raw_coords)}). Must be pairs of X,Y.")
+            coord_pairs = [(raw_coords[i], raw_coords[i + 1]) for i in range(0, len(raw_coords), 2)]
+        else:
+            if "border_video.mp4" in str(input_source):
+                coord_pairs = [(50, 150), (800, 150)]
+            else:
+                coord_pairs = [(100, 540), (1820, 540)]
+                auto_center = True
+
         f_type = FenceType.TRIPWIRE if args.fence_type == "tripwire" else FenceType.POLYGON_ZONE
         f_dir = CrossingDirection(args.fence_dir)
 
@@ -185,6 +206,8 @@ def main():
             direction=f_dir,
             target_classes=[0],  # Alert on persons
         )
+        fence.auto_center = auto_center
+
         intrusion_detector = IntrusionDetector(
             fences=[fence],
             save_snapshots=True,
@@ -206,9 +229,9 @@ def main():
 
     # Execute Video Processing
     output_file = renderer.process_video(
-        input_video_path=args.input,
+        input_video_path=input_source,
         output_video_path=args.output,
-        display_live=args.live,
+        display_live=display_live,
     )
 
     print("\n✅ Processing complete!")
